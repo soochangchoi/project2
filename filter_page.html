@@ -1,0 +1,196 @@
+{% extends 'base.html' %}
+{% block title %}{{ product_type }} 상품 필터링{% endblock %}
+
+{% block content %}
+<!-- ✅ Select2 스타일 -->
+<link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+
+<style>
+    .moa-table th, .moa-table td {
+        vertical-align: middle;
+        text-align: center;
+    }
+    .moa-table th {
+        background-color: #f8f9fa;
+    }
+</style>
+
+<div class="container my-5">
+    <h1 class="display-5 fw-bold text-center">{{ product_type }} 상품</h1>
+
+    <!-- 💰 납입 금액 입력 -->
+    <div class="text-center mb-4">
+        <label for="amountInput" class="form-label fw-bold">예치금 입력 (원)</label>
+        <input type="number" id="amountInput" class="form-control w-25 d-inline-block" value="1000000" step="10000" min="0">
+    </div>
+
+    <!-- ⌛ 가입기간 -->
+    {% if product_type != '대출' %}
+    <div class="mb-3 text-center">
+        <button class="btn btn-outline-dark active" data-period="">전체</button>
+        {% for p in periods %}
+        <button class="btn btn-outline-dark" data-period="{{ p }}">{{ p }}개월</button>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- 🏦 금융권 선택 -->
+    <div class="mb-3 text-center">
+        <button class="btn btn-outline-primary active" data-group="전체" onclick="setBankGroup('전체')">전체</button>
+        <button class="btn btn-outline-primary" data-group="1금융권" onclick="setBankGroup('1금융권')">1금융권</button>
+        <button class="btn btn-outline-primary" data-group="2금융권" onclick="setBankGroup('2금융권')">2금융권</button>
+    </div>
+
+    <!-- 🔍 은행 선택 드롭다운 -->
+    <div class="mb-3 text-center">
+        <select id="bankSelect" class="form-select w-50 d-inline-block" multiple></select>
+    </div>
+
+    <!-- 🗺️ 지역 선택 드롭다운 -->
+    <div class="mb-3 text-center">
+        <select id="regionSelect" class="form-select w-50 d-inline-block">
+            <option value="">전체 지역</option>
+            {% for region in regions %}
+            <option value="{{ region }}">{{ region }}</option>
+            {% endfor %}
+        </select>
+    </div>
+
+    <!-- 🔎 검색 버튼 -->
+    <div class="text-center mb-4">
+        <button id="searchBtn" class="btn btn-primary">검색</button>
+    </div>
+
+    <!-- 📊 상품 테이블 -->
+    <div class="table-responsive">
+        <table class="table table-bordered moa-table">
+            <thead>
+                <tr>
+                    <th>번호</th>
+                    <th>금융회사명</th>
+                    <th>상품명</th>
+                    <th>세전금리</th>
+                    <th>세후수령액</th>
+                    <th>자세히 보기</th>
+                </tr>
+            </thead>
+            <tbody id="product-tbody"></tbody>
+        </table>
+    </div>
+</div>
+
+<!-- ✅ Select2 및 jQuery -->
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+
+<script>
+    let selectedPeriod = "";
+    let selectedBanks = [];
+    let selectedRegion = "";
+    let selectedBankGroup = '전체';
+    const allBanks = {{ banks | tojson }};
+
+    function calculateAfterTax(amount, rate, months = 12) {
+        let grossInterest = amount * (rate / 100) * (months / 12);
+        let tax = grossInterest * 0.154;
+        let afterTax = amount + (grossInterest - tax);
+        return Math.round(afterTax).toLocaleString('ko-KR') + '원';
+    }
+
+    function loadProducts() {
+        // 은행 그룹 필터링: 개별 선택 우선, 선택 없으면 그룹 전체
+let bankListParam = selectedBanks.length > 0 ? selectedBanks : (selectedBankGroup !== '전체' ? allBanks[selectedBankGroup] : []);
+const banksParam = bankListParam.length > 0 ? bankListParam.join('|') : '';
+        const amount = parseFloat(document.getElementById('amountInput').value) || 0;
+        let query = `bank=${encodeURIComponent(banksParam)}`;
+        if (selectedPeriod) query += `&period=${selectedPeriod}`;
+        if (selectedRegion) query += `&region=${encodeURIComponent(selectedRegion)}`;
+        query += `&amount=${amount}`;
+
+        fetch(`/api/{{ product_type_url }}?${query}`)
+            .then(response => response.json())
+            .then(result => {
+                const tbody = document.getElementById('product-tbody');
+                tbody.innerHTML = '';
+                if (result.products.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="6">조건에 맞는 상품이 없습니다.</td></tr>';
+                    return;
+                }
+
+                result.products.forEach((p, idx) => {
+                    const rate = parseFloat(p['최고우대금리(%)']) || 0;
+                    const months = parseInt(p['저축기간(개월)']) || 12;
+                    const afterTax = calculateAfterTax(amount, rate, months);
+                    const encoded = encodeURIComponent(p['상품명']);
+
+                    tbody.innerHTML += `
+                        <tr>
+                            <td>${idx + 1}</td>
+                            <td>${p['금융회사명']}</td>
+                            <td>${p['상품명']}</td>
+                            <td>${rate.toFixed(2)}%</td>
+                            <td>${afterTax}</td>
+                            <td><a href="/{{ product_type_url }}/detail/${encoded}" class="btn btn-sm btn-primary">자세히 보기</a></td>
+                        </tr>`;
+                });
+            });
+    }
+
+    function setBankGroup(group) {
+        selectedBankGroup = group;
+        selectedBanks = [];
+        renderBankDropdown();
+
+        document.querySelectorAll('[data-group]').forEach(btn => btn.classList.remove('active'));
+        document.querySelector(`[data-group="${group}"]`).classList.add('active');
+    }
+
+    function renderBankDropdown() {
+        const $select = $('#bankSelect');
+        $select.empty();
+
+        let bankList = [];
+        if (selectedBankGroup === '전체') {
+            bankList = [...new Set([...allBanks['1금융권'], ...allBanks['2금융권']])];
+        } else {
+            bankList = allBanks[selectedBankGroup] || [];
+        }
+
+        bankList.forEach(bank => {
+            $select.append(new Option(bank, bank));
+        });
+
+        $select.val(null).trigger('change');
+    }
+
+    $(document).ready(function () {
+        $('#bankSelect').select2({
+            placeholder: "은행을 선택하세요",
+            allowClear: true,
+            width: 'resolve',
+            multiple: true
+        });
+
+        $('#bankSelect').on('change', function () {
+            selectedBanks = $(this).val() || [];
+        });
+
+        $('#regionSelect').on('change', function () {
+            selectedRegion = this.value;
+        });
+
+        document.querySelectorAll('[data-period]').forEach(btn => {
+            btn.addEventListener('click', function () {
+                selectedPeriod = this.dataset.period;
+                document.querySelectorAll('[data-period]').forEach(b => b.classList.remove('active'));
+                this.classList.add('active');
+            });
+        });
+
+        document.getElementById('searchBtn').addEventListener('click', loadProducts);
+
+        // 초기 드롭다운 설정
+        setBankGroup('전체');
+    });
+</script>
+{% endblock %}
